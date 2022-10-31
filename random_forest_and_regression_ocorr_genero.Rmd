@@ -1,0 +1,219 @@
+---
+title: "Concorrência por Gênero - Random Forestt"
+output: html_document
+---
+
+```{r}
+setwd("/home/natalia/data-mining-ocorrencia-genero")
+```
+
+Instalação de pacotes necessários:
+```{r setup, include=FALSE}
+library(tidyverse)
+library(tidymodels)
+library(ggplot2)
+install.packages("parsnip")
+library(parsnip)
+install.packages("rminer")
+library(recipes)
+library(magrittr)
+```
+
+## Tratamento e exploração inicial
+
+Carregamento da base:
+```{r}
+df <- read.csv2(file="concorrenciaGenero.csv", header = TRUE, encoding = "latin1")
+```
+
+**A base contempla informações referentes inputs de inscrições em processos seletivos de uma determinada região.**
+
+Para a base em questão foi necessário fazer um tratamento com a coluna **qtd_concorrentes**. Essa coluna se refere a quantidade de pessoas de um dado sexo que se inscreveram em um dado processo seletivo:
+```{r}
+str(df)
+```
+
+Adequação das colunas:
+```{r}
+df <- janitor::clean_names(df)
+```
+
+Devido o necessidade de tratamento percebida no dataframe, foi necessario replicar as linhas de acordo acordo com a quantidade de pessoas da coluna **qtde_concorrentes**:
+```{r}
+df <- df[rep(row.names(df), df$qtde_concorrentes), ] 
+df$qtde_concorrentes <- NULL
+df
+```
+
+Eliminando colunas desnecessarias e tratamento de colunas do tipo factor:
+```{r}
+df$ano <- NULL
+df$nome_processo <- NULL
+df$descricao_grupo <- NULL
+df$semestre <- as.factor(df$semestre)
+df$curso <- as.factor(df$curso)
+df$sexo = as.factor(df$sexo)
+df$nivel_processo = as.factor(df$nivel_processo)
+
+
+
+l_curso<- c()
+n_curso <- c()
+ns_curso = 1
+for (i in unique(df$curso)){
+   l_curso <- append(l_curso,i)
+   n_curso <- append(n_curso,ns_curso)
+   ns_curso = ns_curso + 1
+}
+
+
+l_nproc <- c()
+n_nproc <- c()
+ns_nproc = 1
+for (i in levels(df$nivel_processo)){
+   l_nproc <- append(l_nproc,i)
+   n_nproc <- append(n_nproc, ns_nproc)
+   ns_nproc = ns_nproc +1
+}
+df 
+l_desc <- c()
+n_desc <- c()
+ns_desc = 1
+for (i in levels(df$descricao_grupo)){
+   l_desc <- append(l_desc,i)
+   n_desc <- append(n_desc, ns_desc)
+   ns_desc = ns_desc +1
+}
+
+
+l_desc <- c("")
+n_desc <- c("")
+ns_desc = 1
+for (i in levels(df$descricao_grupo)){
+   l_desc <- append(l_desc,i)
+   n_desc <- append(n_desc, ns_desc)
+   ns_desc = ns_desc +1
+}
+
+
+df$curso = factor(df$curso, levels = l_curso, labels = n_curso)
+df$nivel_processo = factor(df$nivel_processo, levels = l_nproc, labels =n_nproc)
+df$sexo = factor(df$sexo, levels = c("F", "M"),labels = c(1, 2))
+df
+
+```
+
+# Agora, entendendo um pouco dos dados
+
+O dataframe, em relaçação a classe meta, expressa uma divisão rapidamente igualitária entre o sexo Masculino e Feminino:
+```{r}
+df %>% 
+  count(sexo) %>% 
+  mutate(sexo = as.character(sexo)) %>% 
+  ggplot(aes(x = sexo, y = n)) +
+  geom_col(width = 0.9, fill = "lightblue3") +
+  scale_x_discrete(expand = expansion(0.3)) +
+  labs(
+    title = "Classe meta: configuração de distribuição de Genêro",
+    x = "",
+    y = "Contagem"
+  ) +
+  
+theme_minimal()
+```
+```{r}
+summary(df)
+```
+
+# ApliIcando Machine Learning
+
+OBJETVO: Gerar dois classificadores. Os preditores são nível_processo, semestre e curso. Ao utilizar o classificar, saberemos, de acordo com esses atributos se a candidata será do sexo Masculino ou Feminino.
+
+Mas antes, precisamos entender melhor o panorâma dos dados:
+```{r}
+# Split dos dados
+split <- initial_split(data = df, prop = 0.8, strata = sexo)
+
+# Dados para treinamento e teste
+treinamento <- training(split)
+teste <- testing(split)
+
+# preparação para posterior treinamento
+preprocess <- recipe(sexo ~ ., data = treinamento) %>%
+  step_zv(all_predictors())
+
+# validação cruzada - divide os dados de treinamento em partes iguais, sendo uma delas para validação(teste) e outra para análise(treinhamento). 
+folds <- vfold_cv(treinamento, v = 5, strata = sexo)
+folds
+
+
+```
+Modelo de regressão logistica, A acurácia atingida foi de 0.6%:
+```{r}
+# regressão logística
+regressao_logistica <- logistic_reg() %>% 
+  set_engine("glm")
+ 
+# Regressão logística
+wf_reg_log <- workflow() %>%
+  add_recipe(preprocess) %>%
+  add_model(regressao_logistica)
+
+# Regressão logística
+fit_reg_log <- fit_resamples(
+  object = wf_reg_log,
+  resamples = folds,
+  metrics = metric_set(accuracy)
+)
+
+collect_metrics(fit_reg_log)
+```
+Modelo de floresta Randômica, A acurácia atingida foi de 0.6%:
+```{r}
+install.packages("ranger")
+
+
+preprocess <- recipe(sexo ~ ., data = treinamento) %>%
+  step_zv(all_predictors())
+
+# Modelo de RanForest
+random_forest <- rand_forest() %>% 
+  set_engine("ranger") %>% 
+  set_mode("classification")
+
+wf_ran_for <- workflow() %>%
+  add_recipe(preprocess) %>%
+  add_model(random_forest)
+
+fit_ran_for <- fit_resamples(
+  object = wf_ran_for,
+  resamples = folds,
+  metrics = metric_set(accuracy)
+  )
+
+collect_metrics(fit_ran_for)
+```
+
+# Avaliação Final do melhor Modelo
+
+Regressão Logística: 
+```{r}
+
+fit_final <- last_fit(
+  object = wf_reg_log,
+  split = split,
+  metrics = metric_set(accuracy)
+)
+
+fit_final$.metrics[[1]]
+```
+
+```{r}
+cm <- conf_mat(
+  data = fit_final$.predictions[[1]],
+  truth = sexo,                                                   
+  estimate = .pred_class
+) 
+
+autoplot(cm, type = "heatmap")
+```
